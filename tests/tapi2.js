@@ -145,26 +145,43 @@ export async function approveInvoice(page, { number, description, total = 250 })
     await expect(summary).toContainText(description);
 }
 
-// Opens a job action from "More options" and confirms (or backs out of) it.
-// Cancel job: a side panel ("Back" / "Cancel"), then "Cancel" opens a confirm dialog.
-// Close job: a confirm dialog only ("Cancel" backs out, "Close job" confirms).
+// Opens "Cancel job" or "Close job" from "More options" and confirms (or backs out of) it.
+// Both open a side panel first:
+//   Cancel job? — "Back" backs out, "Cancel" goes on
+//   Close job?  — "Cancel" backs out, "Close" goes on (the panel's X button is also named "Close")
+// Going on opens a confirm popup; its confirm button is "Proceed", "Close job" or "Cancel job".
+const PANEL_BUTTONS = {
+    'Cancel job': { back: 'Back',   proceed: 'Cancel' },
+    'Close job':  { back: 'Cancel', proceed: 'Close' },
+};
+
 export async function jobAction(page, action, { confirm }) {
     await page.getByRole('button', { name: 'More options' }).click();
     await page.getByRole('option', { name: action }).click();
-    const dialog = page.locator('[data-test="dialog"]');
 
-    if (action === 'Cancel job') {
-        const panel = page.locator('.side-panel').filter({ has: page.getByRole('heading', { name: 'Cancel job?' }) });
-        await expect(panel).toBeVisible({ timeout: 10000 });
-        await panel.getByRole('button', { name: confirm ? 'Cancel' : 'Back', exact: true }).click();
-        if (confirm && await dialog.isVisible({ timeout: 5000 }).catch(() => false)) {
-            await dialog.locator('[data-test="dialog-confirm-button"]').click();
-        }
-        await expect(panel).toBeHidden({ timeout: 15000 });
+    const panel = page.locator('.side-panel').filter({ has: page.getByRole('heading', { name: `${action}?` }) });
+    const popup = page.locator('[data-test="dialog"]');
+    await expect(panel.or(popup).first(), `${action} panel or popup`).toBeVisible({ timeout: 10000 });
+
+    if (await panel.isVisible()) {
+        const { back, proceed } = PANEL_BUTTONS[action];
+        // .last(): the action button sits after the panel's X ("Close") button.
+        await panel.getByRole('button', { name: confirm ? proceed : back, exact: true }).last().click();
+        if (!confirm) { await expect(panel).toBeHidden({ timeout: 15000 }); return; }
+    }
+
+    if (!confirm) {
+        await popup.locator('[data-test="dialog-cancel-button"]').click();
+        await expect(popup).toBeHidden({ timeout: 15000 });
         return;
     }
 
-    await expect(dialog).toBeVisible({ timeout: 10000 });
-    await dialog.locator(`[data-test="dialog-${confirm ? 'confirm' : 'cancel'}-button"]`).click();
-    await expect(dialog).toBeHidden({ timeout: 15000 });
+    // Confirm popup: click whichever confirm button it has.
+    await expect(popup, `${action} confirm popup`).toBeVisible({ timeout: 10000 });
+    const confirmBtn = popup.locator('[data-test="dialog-confirm-button"]')
+        .or(popup.getByRole('button', { name: new RegExp(`^(Proceed|${action}|Confirm|Yes)$`, 'i') }))
+        .first();
+    await confirmBtn.click();
+    await expect(popup).toBeHidden({ timeout: 15000 });
+    await expect(panel).toBeHidden({ timeout: 15000 });
 }
